@@ -1,4 +1,4 @@
--- // Gelişmiş ESP Sistemi (Test Amaçlı) // --
+-- // Gelişmiş ESP Sistemi + Tracer (Test Amaçlı) // --
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -6,16 +6,37 @@ local CoreGui = game:GetService("CoreGui")
 
 local localPlayer = Players.LocalPlayer
 local espEnabled = false
+local tracerEnabled = false
+local maxDistance = 700 -- Studs cinsinden maksimum algılama mesafesi
+
 local espContainer = Instance.new("Folder")
 espContainer.Name = "ESP_Container"
 espContainer.Parent = CoreGui
 
+-- // Tracer çizgileri için ScreenGui ve Frame kullanımı // --
+local tracerGui = Instance.new("ScreenGui")
+tracerGui.Name = "TracerGui"
+tracerGui.Parent = espContainer
+tracerGui.Enabled = false
+
 -- // Tespit edilecek hedef tipleri // --
 local function isTarget(player)
-    return player ~= localPlayer and player.Character and player.Character:FindFirstChild("Humanoid") and player.Character:FindFirstChild("HumanoidRootPart") and player.Character.Humanoid.Health > 0
+    if player == localPlayer then return false end
+    if not player.Character then return false end
+    local humanoid = player.Character:FindFirstChild("Humanoid")
+    local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not rootPart then return false end
+    if humanoid.Health <= 0 then return false end
+    
+    -- Mesafe kontrolü
+    local localRoot = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not localRoot then return false end
+    
+    local distance = (rootPart.Position - localRoot.Position).Magnitude
+    return distance <= maxDistance
 end
 
--- // Kutu çizimi // --
+-- // ESP Box oluştur // --
 local function createBox(character)
     local highlight = Instance.new("Highlight")
     highlight.Name = "ESP_Highlight"
@@ -53,11 +74,87 @@ local function createNameTag(character, player)
     return billboard
 end
 
+-- // Tracer çizgisi oluştur // --
+local function createTracer(character, player)
+    local frame = Instance.new("Frame")
+    frame.Name = "Tracer_" .. player.Name
+    frame.Size = UDim2.new(0, 1, 0, 0)
+    frame.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+    frame.BorderSizePixel = 0
+    frame.AnchorPoint = Vector2.new(0, 1)
+    frame.Parent = tracerGui
+
+    -- Çizgiyi güncelleyen fonksiyon
+    local function updateTracer()
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        local localRoot = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+        
+        if not rootPart or not localRoot then
+            frame.Visible = false
+            return
+        end
+        
+        local distance = (rootPart.Position - localRoot.Position).Magnitude
+        if distance > maxDistance then
+            frame.Visible = false
+            return
+        end
+        
+        frame.Visible = true
+        
+        -- Ekran koordinatlarına çevir
+        local screenPoint, onScreen = workspace.CurrentCamera:WorldToScreenPoint(rootPart.Position)
+        
+        if onScreen then
+            local viewportSize = workspace.CurrentCamera.ViewportSize
+            local screenX = screenPoint.X
+            local screenY = screenPoint.Y
+            local centerX = viewportSize.X / 2
+            local centerY = viewportSize.Y / 2
+            
+            -- Çizgi uzunluğu ve açısı
+            local deltaX = screenX - centerX
+            local deltaY = screenY - centerY
+            local length = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+            local angle = math.deg(math.atan2(deltaY, deltaX))
+            
+            -- Frame'i konumlandır
+            frame.Position = UDim2.new(0, centerX, 0, centerY)
+            frame.Rotation = angle
+            frame.Size = UDim2.new(0, length, 0, 1)
+        else
+            frame.Visible = false
+        end
+    end
+    
+    -- Tracer güncellemeyi RunService'e bağla
+    updateTracer()
+    local connection
+    connection = RunService.RenderStepped:Connect(function()
+        if not tracerEnabled then
+            frame.Visible = false
+            connection:Disconnect()
+            frame:Destroy()
+            return
+        end
+        updateTracer()
+    end)
+    
+    return frame
+end
+
 -- // ESP güncelleme döngüsü // --
 local function updateESP()
     -- Temizlik yap
     for _, v in pairs(espContainer:GetChildren()) do
         if v:IsA("Highlight") or v:IsA("BillboardGui") then
+            v:Destroy()
+        end
+    end
+    
+    -- Tracer temizliği
+    for _, v in pairs(tracerGui:GetChildren()) do
+        if v:IsA("Frame") then
             v:Destroy()
         end
     end
@@ -68,6 +165,9 @@ local function updateESP()
         if isTarget(player) then
             createBox(player.Character)
             createNameTag(player.Character, player)
+            if tracerEnabled then
+                createTracer(player.Character, player)
+            end
         end
     end
 end
@@ -100,19 +200,33 @@ Players.PlayerRemoving:Connect(function()
     end
 end)
 
--- // E tuşu ile aç/kapat // --
+-- // E tuşu ile ESP aç/kapat // --
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
+    
     if input.KeyCode == Enum.KeyCode.E then
         espEnabled = not espEnabled
+        if not espEnabled then
+            tracerEnabled = false
+        end
         updateESP()
         print("[ESP] Sistem durumu: " .. (espEnabled and "AÇIK" or "KAPALI"))
+    end
+    
+    if input.KeyCode == Enum.KeyCode.T then
+        if espEnabled then
+            tracerEnabled = not tracerEnabled
+            updateESP()
+            print("[Tracer] Sistem durumu: " .. (tracerEnabled and "AÇIK" or "KAPALI"))
+        end
     end
 end)
 
 -- // Sağlık değerlerini sürekli güncelle // --
 RunService.Heartbeat:Connect(function()
     if not espEnabled then return end
+    
+    -- İsim etiketlerini güncelle
     for _, v in pairs(espContainer:GetChildren()) do
         if v:IsA("BillboardGui") and v.Adornee and v.Adornee.Parent then
             local character = v.Adornee.Parent
@@ -131,4 +245,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- // İlk açılış mesajı // --
-print("[ESP] Test aracı yüklendi. E tuşuna basarak açıp kapatabilirsin.")
+print("[ESP] Test aracı yüklendi.")
+print("[ESP] E tuşu: ESP aç/kapat")
+print("[Tracer] T tuşu: Tracer aç/kapat")
+print("[ESP] Maksimum mesafe: " .. maxDistance .. " studs")
