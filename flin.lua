@@ -1,23 +1,21 @@
 -- ============================================================
 -- DIAGNOSTIC FLING + TELEPORT  •  Executor LocalScript
--- Max client-side force • Draggable GUI • Live player list
+-- Hardened fling (Heartbeat spam + max force)
 -- ============================================================
 
 local Players           = game:GetService("Players")
 local UserInputService  = game:GetService("UserInputService")
 local RunService        = game:GetService("RunService")
-local TweenService      = game:GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 
--- Clean previous
 if PlayerGui:FindFirstChild("FlingDiagnosticGui") then
 	PlayerGui.FlingDiagnosticGui:Destroy()
 end
 
 ----------------------------------------------------------------
--- GUI
+-- GUI (unchanged)
 ----------------------------------------------------------------
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "FlingDiagnosticGui"
@@ -39,7 +37,6 @@ local stroke = Instance.new("UIStroke", Main)
 stroke.Color = Color3.fromRGB(50, 50, 60)
 stroke.Thickness = 1.2
 
--- Title bar (drag)
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 38)
 TitleBar.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
@@ -81,7 +78,6 @@ CloseBtn.MouseButton1Click:Connect(function()
 	ScreenGui:Destroy()
 end)
 
--- Drag logic
 local dragging, dragStart, startPos = false, nil, nil
 TitleBar.InputBegan:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -102,7 +98,6 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
--- Header
 local ListHeader = Instance.new("TextLabel")
 ListHeader.Size = UDim2.new(1, -28, 0, 20)
 ListHeader.Position = UDim2.new(0, 14, 0, 46)
@@ -114,7 +109,6 @@ ListHeader.TextColor3 = Color3.fromRGB(130, 130, 145)
 ListHeader.TextXAlignment = Enum.TextXAlignment.Left
 ListHeader.Parent = Main
 
--- Scrolling list
 local Scroll = Instance.new("ScrollingFrame")
 Scroll.Name = "PlayerList"
 Scroll.Size = UDim2.new(1, -28, 0, 250)
@@ -181,7 +175,6 @@ local function updateList()
 	Scroll.CanvasSize = UDim2.new(0, 0, 0, math.max(y + 10, 0))
 end
 
--- Status
 local Status = Instance.new("TextLabel")
 Status.Size = UDim2.new(1, -28, 0, 18)
 Status.Position = UDim2.new(0, 14, 1, -108)
@@ -193,7 +186,6 @@ Status.TextColor3 = Color3.fromRGB(140, 140, 155)
 Status.TextXAlignment = Enum.TextXAlignment.Left
 Status.Parent = Main
 
--- Buttons
 local FlingBtn = Instance.new("TextButton")
 FlingBtn.Size = UDim2.new(0.48, -8, 0, 42)
 FlingBtn.Position = UDim2.new(0, 14, 1, -82)
@@ -219,81 +211,91 @@ TPBtn.Parent = Main
 Instance.new("UICorner", TPBtn).CornerRadius = UDim.new(0, 8)
 
 ----------------------------------------------------------------
--- FLING  (max client-side force)
+-- HARDENED FLING
 ----------------------------------------------------------------
+local flingConnection = nil
+
+local function stopFling()
+	if flingConnection then
+		flingConnection:Disconnect()
+		flingConnection = nil
+	end
+end
+
 local function flingTarget(target)
+	stopFling()
 	if not target or not target.Character then return false end
+
 	local root = target.Character:FindFirstChild("HumanoidRootPart")
 	local hum  = target.Character:FindFirstChildOfClass("Humanoid")
 	if not root then return false end
 
-	-- Disable states that fight the force
+	-- Kill states that fight the launch
 	if hum then
 		pcall(function()
+			hum.PlatformStand = true
 			hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
 			hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
 			hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
+			hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
 		end)
 	end
 
-	-- Strong linear impulse
-	local mass = root.AssemblyMass
-	local impulse = Vector3.new(
-		(math.random() - 0.5) * 220 * mass,
-		math.random(140, 260) * mass,
-		(math.random() - 0.5) * 220 * mass
-	)
-	pcall(function() root:ApplyImpulse(impulse) end)
-
-	-- BodyVelocity (classic high force)
+	-- Create force objects
 	local bv = Instance.new("BodyVelocity")
 	bv.Name = "DiagFling"
-	bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-	bv.P = 1250
-	bv.Velocity = Vector3.new(
-		math.random(-180, 180),
-		math.random(160, 280),
-		math.random(-180, 180)
-	)
+	bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bv.P = 99999
+	bv.Velocity = Vector3.new(0, 0, 0)
 	bv.Parent = root
 
-	-- Angular velocity for spin (extra chaos)
 	local bav = Instance.new("BodyAngularVelocity")
 	bav.Name = "DiagSpin"
-	bav.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-	bav.P = 1250
-	bav.AngularVelocity = Vector3.new(
-		math.random(-40, 40),
-		math.random(-60, 60),
-		math.random(-40, 40)
-	)
+	bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+	bav.P = 99999
+	bav.AngularVelocity = Vector3.new(0, 0, 0)
 	bav.Parent = root
 
-	-- Direct assembly velocity as backup
-	pcall(function()
-		root.AssemblyLinearVelocity = bv.Velocity
-		root.AssemblyAngularVelocity = bav.AngularVelocity
-	end)
+	local start = tick()
+	local duration = 0.65   -- keep forcing for this long
 
-	-- Keep force alive for a short window
-	task.spawn(function()
-		for i = 1, 8 do
-			task.wait(0.05)
-			if not root or not root.Parent then break end
-			pcall(function()
-				root.AssemblyLinearVelocity = bv.Velocity
-				root.AssemblyAngularVelocity = bav.AngularVelocity
-			end)
+	flingConnection = RunService.Heartbeat:Connect(function()
+		if not root or not root.Parent or tick() - start > duration then
+			stopFling()
+			if bv and bv.Parent then bv:Destroy() end
+			if bav and bav.Parent then bav:Destroy() end
+			if hum then
+				pcall(function() hum.PlatformStand = false end)
+			end
+			return
 		end
-		if bv and bv.Parent then bv:Destroy() end
-		if bav and bav.Parent then bav:Destroy() end
+
+		-- Extreme random velocity every frame
+		local power = 180000 + math.random(0, 90000)
+		local vx = (math.random() - 0.5) * power
+		local vy = math.random(90000, 220000)
+		local vz = (math.random() - 0.5) * power
+
+		bv.Velocity = Vector3.new(vx, vy, vz)
+		bav.AngularVelocity = Vector3.new(
+			math.random(-90, 90),
+			math.random(-120, 120),
+			math.random(-90, 90)
+		)
+
+		-- Direct assembly write (most important)
+		pcall(function()
+			root.AssemblyLinearVelocity = Vector3.new(vx, vy, vz)
+			root.AssemblyAngularVelocity = bav.AngularVelocity
+			root.Velocity = Vector3.new(vx, vy, vz) -- legacy fallback
+		end)
 	end)
 
 	return true
 end
 
 ----------------------------------------------------------------
--- TELEPORT (self → target)
+-- TELEPORT
 ----------------------------------------------------------------
 local function teleportTo(target)
 	if not target or not target.Character then return false end
@@ -302,13 +304,12 @@ local function teleportTo(target)
 	if not targetRoot or not myChar then return false end
 	local myRoot = myChar:FindFirstChild("HumanoidRootPart")
 	if not myRoot then return false end
-
 	myRoot.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 5)
 	return true
 end
 
 ----------------------------------------------------------------
--- Button handlers
+-- Buttons
 ----------------------------------------------------------------
 FlingBtn.MouseButton1Click:Connect(function()
 	if not selectedPlayer then
@@ -316,7 +317,7 @@ FlingBtn.MouseButton1Click:Connect(function()
 		return
 	end
 	local ok = flingTarget(selectedPlayer)
-	Status.Text = ok and ("Fling → " .. selectedPlayer.DisplayName) or "Target invalid"
+	Status.Text = ok and ("Fling active → " .. selectedPlayer.DisplayName) or "Target invalid"
 	local orig = FlingBtn.BackgroundColor3
 	FlingBtn.BackgroundColor3 = Color3.fromRGB(230, 70, 80)
 	task.wait(0.12)
@@ -337,7 +338,7 @@ TPBtn.MouseButton1Click:Connect(function()
 end)
 
 ----------------------------------------------------------------
--- Live list + refresh
+-- List
 ----------------------------------------------------------------
 updateList()
 Players.PlayerAdded:Connect(updateList)
